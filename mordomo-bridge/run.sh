@@ -1,36 +1,43 @@
-#!/usr/bin/with-contenv bashio
+#!/bin/bash
+set -e
 
-# -- Read addon config --
-BRIDGE_PORT=$(bashio::config 'bridge_port')
+# ============================================================
+#  Mordomo HA - WhatsApp Bridge (init: false - no s6-overlay)
+#  Reads config from /data/options.json (HA add-on standard)
+# ============================================================
+
+# -- Read addon config from options.json --
+OPTIONS_FILE="/data/options.json"
+if [ ! -f "$OPTIONS_FILE" ]; then
+    echo "[ERROR] Options file not found: $OPTIONS_FILE"
+    exit 1
+fi
+
+BRIDGE_PORT=$(jq -r '.bridge_port // 3781' "$OPTIONS_FILE")
+CONFIG_WEBHOOK=$(jq -r '.webhook_url // ""' "$OPTIONS_FILE")
 
 # -- Auth dir - persisted across restarts --
 AUTH_DIR="/config/mordomo_bridge/auth"
 mkdir -p "$AUTH_DIR" 2>/dev/null || {
-    # Fallback to addon_config if /config is not writable
+    # Fallback if /config is not writable
     AUTH_DIR="/data/auth"
     mkdir -p "$AUTH_DIR"
-    bashio::log.warning "Could not create /config/mordomo_bridge/auth, using /data/auth instead"
+    echo "[WARN] Could not create /config/mordomo_bridge/auth, using /data/auth"
 }
 
 # -- Webhook URL resolution --
-# Priority order:
-#  1. Explicitly configured webhook_url in addon options
-#  2. Auto-discovery via HA Supervisor API (finds the real dynamic webhook ID)
-#  3. Fallback with warning
-
 WEBHOOK_URL=""
 
 # 1. User-configured URL takes priority
-if bashio::config.has_value 'webhook_url'; then
-    WEBHOOK_URL=$(bashio::config 'webhook_url')
-    bashio::log.info "Using configured webhook URL: $WEBHOOK_URL"
+if [ -n "$CONFIG_WEBHOOK" ]; then
+    WEBHOOK_URL="$CONFIG_WEBHOOK"
+    echo "[INFO] Using configured webhook URL: $WEBHOOK_URL"
 fi
 
 # 2. Auto-discover via HA Supervisor API
 if [ -z "$WEBHOOK_URL" ] && [ -n "${SUPERVISOR_TOKEN:-}" ]; then
-    bashio::log.info "Auto-discovering Mordomo HA webhook via HA API..."
+    echo "[INFO] Auto-discovering Mordomo HA webhook via HA API..."
 
-    # Try to find the config entry ID for mordomo_ha
     ENTRY_ID=$(curl -s -f \
         -H "Authorization: Bearer ${SUPERVISOR_TOKEN}" \
         -H "Content-Type: application/json" \
@@ -49,26 +56,19 @@ except:
 
     if [ -n "$ENTRY_ID" ]; then
         WEBHOOK_URL="http://supervisor/core/api/webhook/mordomo_ha_${ENTRY_ID}"
-        bashio::log.info "Auto-discovered webhook from config entry: $WEBHOOK_URL"
+        echo "[INFO] Auto-discovered webhook: $WEBHOOK_URL"
     else
-        bashio::log.info "Mordomo HA integration not found yet - it may not be configured."
-        bashio::log.info "The bridge will start but won't forward messages until webhook is set."
+        echo "[INFO] Mordomo HA integration not found yet - will start without webhook"
     fi
 fi
 
 # 3. Final fallback
 if [ -z "$WEBHOOK_URL" ]; then
-    bashio::log.warning "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    bashio::log.warning "  Webhook URL nao descoberto automaticamente."
-    bashio::log.warning "  A bridge vai iniciar mas nao consegue reencaminhar"
-    bashio::log.warning "  mensagens para o HA ate o webhook ser configurado."
-    bashio::log.warning ""
-    bashio::log.warning "  Para configurar:"
-    bashio::log.warning "  1. Abre o HA -> Mordomo HA -> Dashboard"
-    bashio::log.warning "  2. Copia o webhook URL"
-    bashio::log.warning "  3. Cola nas opcoes deste add-on"
-    bashio::log.warning "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    # Use a fallback that at least allows the bridge to start
+    echo "[WARN] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "[WARN]   Webhook URL nao descoberto automaticamente."
+    echo "[WARN]   A bridge vai iniciar mas nao reencaminha mensagens."
+    echo "[WARN]   Configura o webhook nas opcoes do add-on."
+    echo "[WARN] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     WEBHOOK_URL="http://supervisor/core/api/webhook/mordomo_ha_placeholder"
 fi
 
@@ -78,22 +78,22 @@ export MORDOMO_BRIDGE_PORT="$BRIDGE_PORT"
 export MORDOMO_AUTH_DIR="$AUTH_DIR"
 export MORDOMO_LOG_LEVEL="info"
 
-# If SUPERVISOR_TOKEN is available, pass it so the bridge can authenticate
+# If SUPERVISOR_TOKEN is available, pass it for webhook auth
 if [ -n "${SUPERVISOR_TOKEN:-}" ]; then
     export MORDOMO_HA_TOKEN="${SUPERVISOR_TOKEN}"
 fi
 
 # -- Log startup --
-bashio::log.info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-bashio::log.info "  Mordomo HA - WhatsApp Bridge v1.0.3"
-bashio::log.info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-bashio::log.info "  Bridge Port: $BRIDGE_PORT"
-bashio::log.info "  Webhook:     $WEBHOOK_URL"
-bashio::log.info "  Auth Dir:    $AUTH_DIR"
-bashio::log.info ""
-bashio::log.info "  Abre o Mordomo HA dashboard para"
-bashio::log.info "  escanear o QR code com o WhatsApp."
-bashio::log.info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  Mordomo HA - WhatsApp Bridge v1.0.5"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  Bridge Port: $BRIDGE_PORT"
+echo "  Webhook:     $WEBHOOK_URL"
+echo "  Auth Dir:    $AUTH_DIR"
+echo ""
+echo "  Abre o Mordomo HA dashboard para"
+echo "  escanear o QR code com o WhatsApp."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# -- Run bridge --
+# -- Run bridge (exec replaces shell with node process) --
 exec node /app/baileys_bridge.js
