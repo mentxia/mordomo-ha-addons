@@ -2,7 +2,7 @@ ARG BUILD_FROM
 FROM ${BUILD_FROM}
 
 # Install Node.js and build dependencies
-RUN apk add --no-cache nodejs npm git python3 make g++
+RUN apk add --no-cache nodejs npm git python3 make g++ curl
 
 # Setup app
 WORKDIR /app
@@ -20,4 +20,4 @@ RUN chmod +x /run.sh
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
   CMD wget -q -O /dev/null http://127.0.0.1:${MORDOMO_BRIDGE_PORT:-3781}/health || exit 1
 
-  CMD ["/run.sh"]
+CMD ["/run.sh"]

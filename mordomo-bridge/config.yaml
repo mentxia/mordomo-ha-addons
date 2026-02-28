@@ -1,7 +1,7 @@
 ---
 name: "Mordomo HA - WhatsApp Bridge"
 description: "Ponte WhatsApp para o Mordomo HA. Liga o teu WhatsApp com QR code - sem configuracao adicional."
-version: "1.0.1"
+version: "1.0.2"
 slug: "mordomo_bridge"
 url: "https://github.com/mentxia/mordomo-ha-addons"
 arch:
@@ -21,4 +21,5 @@ schema:
 map:
   - addon_config:rw
 homeassistant_api: true
+auth_api: true
 panel_icon: "mdi:whatsapp"
