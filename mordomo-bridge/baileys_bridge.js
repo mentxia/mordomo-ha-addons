@@ -1,20 +1,26 @@
 /**
- * Mordomo HA - Baileys WhatsApp Bridge
- * 
- * Direct WhatsApp Web connection using Baileys (same approach as OpenClaw).
+ * Mordomo HA - Baileys WhatsApp Bridge (ESM)
+ *
+ * Direct WhatsApp Web connection using Baileys.
  * No external gateways needed - just scan QR code and go.
- * 
- * Runs as a Node.js subprocess managed by the HA component.
+ *
+ * Runs as a Node.js process managed by the HA add-on.
  * Communicates with HA via HTTP webhook callbacks.
  */
 
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, makeCacheableSignalKeyStore } = require('@whiskeysockets/baileys');
-const { Boom } = require('@hapi/boom');
-const pino = require('pino');
-const fs = require('fs');
-const path = require('path');
-const http = require('http');
-const QRCode = require('qrcode');
+import baileys from '@whiskeysockets/baileys';
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, makeCacheableSignalKeyStore } = baileys;
+import Boom from '@hapi/boom';
+import pino from 'pino';
+import fs from 'fs';
+import path from 'path';
+import http from 'http';
+import https from 'https';
+import { fileURLToPath } from 'url';
+import QRCode from 'qrcode';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // ── Configuration ──
 const CONFIG = {
@@ -29,7 +35,7 @@ const CONFIG = {
 let sock = null;
 let qrCode = null;
 let qrBase64 = null;
-let connectionStatus = 'disconnected'; // disconnected, qr_ready, connecting, connected
+let connectionStatus = 'disconnected';
 let lastError = null;
 let messageCount = { in: 0, out: 0 };
 
@@ -64,12 +70,10 @@ async function startWhatsApp() {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
-      // New QR code to scan
       qrCode = qr;
       connectionStatus = 'qr_ready';
       lastError = null;
 
-      // Generate base64 QR image
       try {
         qrBase64 = await QRCode.toDataURL(qr, { width: 300, margin: 2 });
       } catch (err) {
@@ -85,18 +89,16 @@ async function startWhatsApp() {
     }
 
     if (connection === 'close') {
-      const reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
+      const reason = new Boom.Boom(lastDisconnect?.error)?.output?.statusCode;
       lastError = lastDisconnect?.error?.message || 'Unknown error';
 
       if (reason === DisconnectReason.loggedOut) {
         console.log('⛔ WhatsApp logged out. Clear auth and re-scan.');
         connectionStatus = 'disconnected';
-        // Clear auth state
         if (fs.existsSync(CONFIG.authDir)) {
           fs.rmSync(CONFIG.authDir, { recursive: true, force: true });
           fs.mkdirSync(CONFIG.authDir, { recursive: true });
         }
-        // Restart to show new QR
         setTimeout(startWhatsApp, 3000);
       } else if (reason === DisconnectReason.restartRequired) {
         console.log('🔄 Restart required, reconnecting...');
@@ -118,7 +120,6 @@ async function startWhatsApp() {
     }
   });
 
-  // ── Save credentials on update ──
   sock.ev.on('creds.update', saveCreds);
 
   // ── Incoming Messages ──
@@ -126,13 +127,9 @@ async function startWhatsApp() {
     if (type !== 'notify') return;
 
     for (const msg of messages) {
-      // Skip own messages
       if (msg.key.fromMe) continue;
-
-      // Skip status broadcasts
       if (msg.key.remoteJid === 'status@broadcast') continue;
 
-      // Extract text
       const text = msg.message?.conversation
         || msg.message?.extendedTextMessage?.text
         || msg.message?.imageMessage?.caption
@@ -141,7 +138,6 @@ async function startWhatsApp() {
 
       if (!text) continue;
 
-      // Extract sender
       const remoteJid = msg.key.remoteJid;
       const sender = remoteJid.replace('@s.whatsapp.net', '').replace('@g.us', '');
       const isGroup = remoteJid.endsWith('@g.us');
@@ -151,19 +147,16 @@ async function startWhatsApp() {
 
       console.log(`📩 Message from ${participant}: ${text.substring(0, 80)}`);
 
-      // Send optional read receipt
       try {
         await sock.readMessages([msg.key]);
       } catch (e) { /* ignore */ }
 
-      // Send optional reaction to acknowledge
       try {
         await sock.sendMessage(remoteJid, {
           react: { text: '👀', key: msg.key }
         });
       } catch (e) { /* ignore */ }
 
-      // Forward to Home Assistant webhook
       await forwardToHA({
         from: participant,
         message: text,
@@ -189,6 +182,7 @@ async function forwardToHA(data) {
       port: url.port || (url.protocol === 'https:' ? 443 : 80),
       path: url.pathname,
       method: 'POST',
+      timeout: 10000,
       headers: {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(payload),
@@ -200,7 +194,7 @@ async function forwardToHA(data) {
     }
 
     return new Promise((resolve, reject) => {
-      const proto = url.protocol === 'https:' ? require('https') : http;
+      const proto = url.protocol === 'https:' ? https : http;
       const req = proto.request(options, (res) => {
         let body = '';
         res.on('data', (chunk) => body += chunk);
@@ -209,6 +203,10 @@ async function forwardToHA(data) {
       req.on('error', (err) => {
         logger.error('Webhook forward error:', err.message);
         reject(err);
+      });
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new Error('Webhook request timed out'));
       });
       req.write(payload);
       req.end();
@@ -224,13 +222,11 @@ async function sendMessage(to, text) {
     throw new Error('WhatsApp not connected');
   }
 
-  // Ensure JID format
   let jid = to;
   if (!jid.includes('@')) {
     jid = `${to.replace('+', '')}@s.whatsapp.net`;
   }
 
-  // Split long messages
   const MAX_LEN = 4000;
   const parts = [];
   for (let i = 0; i < text.length; i += MAX_LEN) {
@@ -262,15 +258,14 @@ async function sendImage(to, imageUrl, caption = '') {
   });
 }
 
-// ── HTTP API Server (for HA to communicate with the bridge) ──
+// ── HTTP API Server ──
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${CONFIG.httpPort}`);
-  
-  // CORS headers
+
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  
+
   if (req.method === 'OPTIONS') {
     res.writeHead(200);
     res.end();
@@ -283,7 +278,6 @@ const server = http.createServer(async (req, res) => {
   };
 
   try {
-    // ── GET /status ──
     if (req.method === 'GET' && url.pathname === '/status') {
       json({
         status: connectionStatus,
@@ -293,7 +287,6 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
-    // ── GET /qr ──
     else if (req.method === 'GET' && url.pathname === '/qr') {
       if (connectionStatus === 'connected') {
         json({ status: 'connected', qr: null, qr_base64: null });
@@ -304,7 +297,6 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    // ── POST /send ──
     else if (req.method === 'POST' && url.pathname === '/send') {
       let body = '';
       req.on('data', (chunk) => body += chunk);
@@ -317,10 +309,9 @@ const server = http.createServer(async (req, res) => {
           json({ error: err.message }, 500);
         }
       });
-      return; // Don't end yet, waiting for body
+      return;
     }
 
-    // ── POST /send-image ──
     else if (req.method === 'POST' && url.pathname === '/send-image') {
       let body = '';
       req.on('data', (chunk) => body += chunk);
@@ -336,13 +327,11 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // ── POST /logout ──
     else if (req.method === 'POST' && url.pathname === '/logout') {
       try {
         if (sock) {
           await sock.logout();
         }
-        // Clear auth
         if (fs.existsSync(CONFIG.authDir)) {
           fs.rmSync(CONFIG.authDir, { recursive: true, force: true });
           fs.mkdirSync(CONFIG.authDir, { recursive: true });
@@ -351,19 +340,16 @@ const server = http.createServer(async (req, res) => {
         qrCode = null;
         qrBase64 = null;
         json({ success: true, message: 'Logged out. Restart bridge to re-pair.' });
-        // Restart connection to show new QR
         setTimeout(startWhatsApp, 2000);
       } catch (err) {
         json({ error: err.message }, 500);
       }
     }
 
-    // ── GET /health ──
     else if (req.method === 'GET' && url.pathname === '/health') {
       json({ ok: true, pid: process.pid });
     }
 
-    // ── 404 ──
     else {
       json({ error: 'Not found' }, 404);
     }
@@ -378,7 +364,7 @@ server.listen(CONFIG.httpPort, '0.0.0.0', () => {
   console.log(`   HTTP API: http://0.0.0.0:${CONFIG.httpPort}`);
   console.log(`   Webhook:  ${CONFIG.webhookUrl}`);
   console.log(`   Auth dir: ${CONFIG.authDir}\n`);
-  
+
   startWhatsApp();
 });
 

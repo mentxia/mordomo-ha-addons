@@ -1,7 +1,8 @@
 {
   "name": "mordomo-ha-bridge",
-  "version": "1.0.0",
+  "version": "1.0.5",
   "description": "Mordomo HA WhatsApp Bridge - Direct Baileys connection",
+  "type": "module",
   "main": "baileys_bridge.js",
   "scripts": {
     "start": "node baileys_bridge.js"
