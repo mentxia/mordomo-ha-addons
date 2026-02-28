@@ -5,7 +5,12 @@ BRIDGE_PORT=$(bashio::config 'bridge_port')
 
 # -- Auth dir - persisted across restarts --
 AUTH_DIR="/config/mordomo_bridge/auth"
-mkdir -p "$AUTH_DIR"
+mkdir -p "$AUTH_DIR" 2>/dev/null || {
+    # Fallback to addon_config if /config is not writable
+    AUTH_DIR="/data/auth"
+    mkdir -p "$AUTH_DIR"
+    bashio::log.warning "Could not create /config/mordomo_bridge/auth, using /data/auth instead"
+}
 
 # -- Webhook URL resolution --
 # Priority order:
@@ -16,7 +21,7 @@ mkdir -p "$AUTH_DIR"
 WEBHOOK_URL=""
 
 # 1. User-configured URL takes priority
-if bashio::config.exists 'webhook_url' && bashio::var.has_value "$(bashio::config 'webhook_url' 2>/dev/null)"; then
+if bashio::config.has_value 'webhook_url'; then
     WEBHOOK_URL=$(bashio::config 'webhook_url')
     bashio::log.info "Using configured webhook URL: $WEBHOOK_URL"
 fi
@@ -80,7 +85,7 @@ fi
 
 # -- Log startup --
 bashio::log.info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-bashio::log.info "  Mordomo HA - WhatsApp Bridge"
+bashio::log.info "  Mordomo HA - WhatsApp Bridge v1.0.3"
 bashio::log.info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 bashio::log.info "  Bridge Port: $BRIDGE_PORT"
 bashio::log.info "  Webhook:     $WEBHOOK_URL"

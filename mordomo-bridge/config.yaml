@@ -1,7 +1,7 @@
 ---
 name: "Mordomo HA - WhatsApp Bridge"
 description: "Ponte WhatsApp para o Mordomo HA. Liga o teu WhatsApp com QR code - sem configuracao adicional."
-version: "1.0.3"
+version: "1.0.4"
 slug: "mordomo_bridge"
 url: "https://github.com/mentxia/mordomo-ha-addons"
 arch:
@@ -17,7 +17,7 @@ options:
   webhook_url: ""
 schema:
   bridge_port: port
-  webhook_url: str
+  webhook_url: "str?"
 map:
   - config:rw
   - addon_config:rw
